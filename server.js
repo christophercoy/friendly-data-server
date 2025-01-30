@@ -10,29 +10,30 @@ const { WebClient } = require('@slack/web-api');
 const { query } = require('express');
 
 const aiPrompt = `
-                    The vm_simple_measures view has the following fields:
-                    - id: integer
-                    - measurement: string (name of the measurement)
-                    - clinic_id: integer
-                    - clinic_name: string
-                    - public_patient_id: integer
-                    - first_name: string
-                    - last_name: string
-                    - evaluation_date_time: timestamp
-                    - answer_value: numeric (the value of the measurement)
+                    The 'vm_simple_measures' view contains the following fields:
+                    - 'id': integer
+                    - 'measurement': string (name of the measurement)
+                    - 'clinic_id': integer
+                    - 'clinic_name': string
+                    - 'public_patient_id': integer
+                    - 'first_name': string
+                    - 'last_name': string
+                    - 'evaluation_date_time': timestamp
+                    - 'answer_value': numeric (the value of the measurement) is double precision do not use in rounding
 
-                    Based on this structure, generate a SQL query based on the question at the very end of this prompt.
-                    ONLY provide the SQL, nothing else, no headers, no human commentary and no "sql" with tick marks.
-                    Dates and times provided should be in a short friendly format.
-                    The questions may ask about averages, trends, specific measurements, measurements across all patients, etc.
-                    The measurement field contains the name of the measurement, so openai will need to understand how to find the best match when the exact match may not exist.
-                    Calculate a running_avg column if needed.
-                    If the question is about a trend, show the trend in the data.
-                    Use ILIKE statements in the measurement field with prefix % and suffix % so partial matching works.
-                    For all measurements, also provide the date and time.
-                    Make sure all fields not used in aggregate queries (when using an aggregate) appear in the GROUP BY clause.
-                    Always use an order by clause! 
-                    USE DISTINCT at all times!
+                    Instructions for generating a SQL query based on the question at the end:
+                    - Output only the SQL query without headers, human commentary, or tick marks.
+                    - Use '%' wildcards with 'ILIKE' for partial matching in the 'measurement' field.
+                    - Include 'DISTINCT' to ensure unique results.
+                    - All non-aggregated fields should be in the 'GROUP BY' clause for aggregate queries.
+                    - Do not use LAG and HAVING clauses in combination
+                    - Always include an 'ORDER BY' clause.
+                    - Convert dates and times to a short, friendly format.
+                    - Include a 'running_avg' column if calculating an average over time.
+                    - If the query involves trends, ensure the SQL reflects this.
+                    - Provide 'evaluation_date_time' for each measurement.
+                    - Remove script commentary and tick marks. Only return SQL
+                    - IMPORTANT: Do not include explanations, comments, or annotations—return only the SQL query.
                     The question is: `;
 
 // Configure the environment, start the express server
@@ -187,17 +188,25 @@ slackEvents.on('app_mention', async (event) => {
     await queryDatabase(event.text).then(data => {
       console.log('Data returned was', data);
 
-      const slackBlockMessage = convertJsonToSlackBlocks(data);
+      if(data && data.length > 0) {
+        const slackBlockMessage = convertJsonToSlackBlocks(data);
 
-      slackClient.chat.postMessage({
-        channel: event.channel,
-        blocks: slackBlockMessage.blocks,
-      });
+        slackClient.chat.postMessage({
+          channel: event.channel,
+          blocks: slackBlockMessage.blocks,
+          text: 'Data found, please use the slack web, desktop or mobile client.'
+        });
+      } else {
+        slackClient.chat.postMessage({
+          channel: event.channel,
+          text: 'No data found'
+        });
+      }
     });
 
 
   } catch (error) {
-    console.error('Error responding to mention:', error);
+    console.error('Error responding:', error);
   }
 });
 
