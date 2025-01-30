@@ -31,7 +31,8 @@ const aiPrompt = `
                     Use ILIKE statements in the measurement field with prefix % and suffix % so partial matching works.
                     For all measurements, also provide the date and time.
                     Make sure all fields not used in aggregate queries (when using an aggregate) appear in the GROUP BY clause.
-                    Always use an order by clause!
+                    Always use an order by clause! 
+                    USE DISTINCT at all times!
                     The question is: `;
 
 // Configure the environment, start the express server
@@ -47,20 +48,20 @@ app.use('/slack/events', slackEvents.expressMiddleware());
 
 // Let's be unsecured.
 app.use(cors({
-    origin: '*', // Replace with your React app's URL
-    methods: ['GET', 'POST'], // Adjust the allowed methods if necessary
-    credentials: true, // If you need to include cookies in the requests
+  origin: '*', // Replace with your React app's URL
+  methods: ['GET', 'POST'], // Adjust the allowed methods if necessary
+  credentials: true, // If you need to include cookies in the requests
 }));
 
 app.use(express.json());
 
 // PostgreSQL pool connection setup
 const pool = new Pool({
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: process.env.DB_DATABASE,
-    password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT,
+  user: process.env.DB_USER,
+  host: process.env.DB_HOST,
+  database: process.env.DB_DATABASE,
+  password: process.env.DB_PASSWORD,
+  port: process.env.DB_PORT,
 });
 
 // Set up openAI. We will send it info about our view's fields so it can come up with queries.
@@ -74,40 +75,40 @@ let botUserId;
 
 // POST endpoint to handle questions from a basic HTTP POST
 app.post('/ask', async (req, res) => {
-    const { question } = req.body;
-    try {
-        let answer = await queryDatabase(question);
-        res.json(answer);
-    } catch (error) {
-        console.error('Error processing the request:', error);
-        res.status(500).send('Server Error');
-    }
+  const { question } = req.body;
+  try {
+    let answer = await queryDatabase(question);
+    res.json(answer);
+  } catch (error) {
+    console.error('Error processing the request:', error);
+    res.status(500).send('Server Error');
+  }
 });
 
 async function queryDatabase(question) {
-    try {
-        // Use OpenAI to generate SQL query
-        const gptResponse = await axios.post(OPENAI_API_URL, {
-            model: 'gpt-4',
-            messages: [{
-                role: 'user',
-                content: aiPrompt + question
-            }],
-        }, {
-            headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
-        });
+  try {
+    // Use OpenAI to generate SQL query
+    const gptResponse = await axios.post(OPENAI_API_URL, {
+      model: 'gpt-4',
+      messages: [{
+        role: 'user',
+        content: aiPrompt + question
+      }],
+    }, {
+      headers: { 'Authorization': `Bearer ${OPENAI_API_KEY}` },
+    });
 
-        // Should check for nulls here, etc. WIP
-        console.log('response', gptResponse.data.choices[0].message.content);
-        const sqlQuery = gptResponse.data.choices[0].message.content;
-        const results = await pool.query(sqlQuery);
+    // Should check for nulls here, etc. WIP
+    console.log('response', gptResponse.data.choices[0].message.content);
+    const sqlQuery = gptResponse.data.choices[0].message.content;
+    const results = await pool.query(sqlQuery);
 
-        // Send the results back. Not jsonified yet.
-        return results.rows;
-    } catch (error) {
-        console.error('Error processing the request:', error);
-        throw error;
-    }
+    // Send the results back. Not jsonified yet.
+    return results.rows;
+  } catch (error) {
+    console.error('Error processing the request:', error);
+    throw error;
+  }
 }
 
 // BEGIN Slack event handling
@@ -130,17 +131,71 @@ obtainBotUserId().then(id => {
 // Integrate Slack events as middleware
 app.use('/slack/events', slackEvents.expressMiddleware());
 
+// Message conversion - from generic JSON to Block Kit formatting in Slack
+function convertJsonToSlackBlocks(jsonData) {
+  if (!Array.isArray(jsonData) || jsonData.length === 0) {
+    throw new Error("JSON data should be a non-empty array.");
+  }
+  const blocks = [];
+
+  jsonData.forEach((data, index) => {
+    const section = {
+      type: 'section',
+      fields: [],
+    };
+
+    Object.entries(data).forEach(([key, value]) => {
+      const formattedKey = key.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
+      let formattedValue;
+
+      if (key.toLowerCase().includes('date') || key.toLowerCase().includes('time')) {
+        try {
+          const date = new Date(value);
+          const unixTimestamp = Math.floor(date.getTime() / 1000);
+          formattedValue = `<!date^${unixTimestamp}^{date_short_pretty} at {time}|${value}>`;
+        } catch (error) {
+          formattedValue = value.toString();
+        }
+      } else {
+        formattedValue = value.toString();
+      }
+
+      section.fields.push({
+        type: 'mrkdwn',
+        text: `*${formattedKey}:*\n${formattedValue}`,
+      });
+    });
+
+    // Adding a divider between different entries, optional
+    if (index > 0) {
+      blocks.push({ type: 'divider' });
+    }
+
+    blocks.push(section);
+  });
+
+  return { blocks };
+}
+
 // Event handling
 slackEvents.on('app_mention', async (event) => {
   try {
-    console.log(`Bot mentioned in channel ${event.channel} by user ${event.user}, message was ${event}`);
+    console.log(`Bot mentioned in channel ${event.channel} by user ${event.user}, message was ${event.text}`);
 
-    const responseText = `<@${event.user}>: Here is the data you requested... `;
+    // const responseText = `<@${event.user}>: `;
 
-    await slackClient.chat.postMessage({
-      channel: event.channel,
-      text: responseText + '```' + await queryDatabase(event.message) + '```',
+    await queryDatabase(event.text).then(data => {
+      console.log('Data returned was', data);
+
+      const slackBlockMessage = convertJsonToSlackBlocks(data);
+
+      slackClient.chat.postMessage({
+        channel: event.channel,
+        blocks: slackBlockMessage.blocks,
+      });
     });
+
+
   } catch (error) {
     console.error('Error responding to mention:', error);
   }
@@ -153,5 +208,5 @@ slackEvents.on('error', console.error);
 // Get the server going.
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
