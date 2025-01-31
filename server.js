@@ -21,7 +21,25 @@ const aiPrompt = `
                     - 'evaluation_date_time': timestamp
                     - 'answer_value': numeric (the value of the measurement) is double precision do not use in rounding
 
+                    The 'vw_patients' view constains the following fields:
+                    - 'public_patient_id'
+                    - 'patient_id'
+                    - 'patient_key'
+                    - 'evaluation_count'
+                    - 'last_name'
+                    - 'first_name'
+                    - 'clinic_name'
+                    - 'dob'
+                    - 'clinic_id'
+                    - 'zip'
+                    - 'sex'
+                    - 'date_started'
+
                     Instructions for generating a SQL query based on the question at the end:
+                    - Do not use single quotes around field names, view names or table names
+                    - Based on the question, query one or both views described. Join if necessary
+                    - If asking about measurements, vm_simple_measures is appropriate.
+                    - If asking about patient info without measurements, use vw_patients
                     - Output only the SQL query without headers, human commentary, or tick marks.
                     - Use '%' wildcards with 'ILIKE' for partial matching in the 'measurement' field.
                     - Include 'DISTINCT' to ensure unique results.
@@ -88,6 +106,9 @@ app.post('/ask', async (req, res) => {
 
 async function queryDatabase(question) {
   try {
+
+    console.log("Question asked was", question);
+
     // Use OpenAI to generate SQL query
     const gptResponse = await axios.post(OPENAI_API_URL, {
       model: 'gpt-4',
